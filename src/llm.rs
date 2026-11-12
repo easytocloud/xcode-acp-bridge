@@ -690,10 +690,7 @@ impl LlmConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
-            prompt_supports_image: matches!(
-                std::env::var("LLM_SUPPORTS_IMAGE").as_deref(),
-                Ok("1") | Ok("true") | Ok("yes") | Ok("on")
-            ),
+            prompt_supports_image: parse_bool_env("LLM_SUPPORTS_IMAGE").unwrap_or(false),
             context_size: std::env::var("LLM_MODEL_CONTEXT")
                 .ok()
                 .and_then(|v| v.parse().ok())

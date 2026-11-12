@@ -205,11 +205,10 @@ impl ConfigFile {
             .or(file.session_idle_timeout_secs)
             .unwrap_or(0);
 
-        let prompt_supports_image = match env("LLM_SUPPORTS_IMAGE").as_deref() {
-            Some("1") | Some("true") | Some("yes") | Some("on") => true,
-            Some("0") | Some("false") | Some("no") | Some("off") => false,
-            _ => file.supports_image.unwrap_or(false),
-        };
+        let prompt_supports_image = env("LLM_SUPPORTS_IMAGE")
+            .as_deref()
+            .and_then(crate::llm::parse_bool_value)
+            .unwrap_or_else(|| file.supports_image.unwrap_or(false));
 
         let context_size = env("LLM_MODEL_CONTEXT")
             .and_then(|v| v.parse().ok())
@@ -313,5 +312,44 @@ mod tests {
         ]);
         let llm = ConfigFile::default().into_llm_config_with_env(&|k| env.get(k).cloned());
         assert_eq!(llm.base_url, "http://vllm:8000/v1");
+    }
+
+    #[test]
+    fn llm_config_image_flag_parses_like_other_bool_flags() {
+        for (value, expected) in [
+            ("true", true),
+            ("TRUE", true),
+            ("True", true),
+            ("1", true),
+            ("yes", true),
+            ("on", true),
+            ("false", false),
+            ("OFF", false),
+            ("0", false),
+        ] {
+            let env = env_from(&[("LLM_SUPPORTS_IMAGE", value)]);
+            let llm = ConfigFile::default().into_llm_config_with_env(&|k| env.get(k).cloned());
+            assert_eq!(
+                llm.prompt_supports_image, expected,
+                "LLM_SUPPORTS_IMAGE={value} should map to {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn llm_config_invalid_image_flag_value_falls_back_to_file() {
+        let env = env_from(&[("LLM_SUPPORTS_IMAGE", "maybe")]);
+        let cfg = ConfigFile {
+            llm: LlmSection {
+                supports_image: Some(true),
+                ..LlmSection::default()
+            },
+            ..ConfigFile::default()
+        };
+        let llm = cfg.into_llm_config_with_env(&|k| env.get(k).cloned());
+        assert!(
+            llm.prompt_supports_image,
+            "unparseable env value must not override a valid file value"
+        );
     }
 }

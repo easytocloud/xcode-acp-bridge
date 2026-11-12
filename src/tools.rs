@@ -1309,6 +1309,44 @@ mod tests {
     /// threads. Only tests that touch env need to take this.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Restores an env var to its prior value when dropped — even on
+    /// panic — so a test can mutate it without leaking the new state to
+    /// later tests or to a value the developer exported in their shell.
+    /// Must be used while holding `ENV_LOCK`.
+    struct EnvGuard {
+        key: &'static str,
+        prior: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let guard = Self {
+                key,
+                prior: std::env::var(key).ok(),
+            };
+            std::env::set_var(key, value);
+            guard
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let guard = Self {
+                key,
+                prior: std::env::var(key).ok(),
+            };
+            std::env::remove_var(key);
+            guard
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
     fn pid_alive(pid: &str) -> bool {
         std::process::Command::new("kill")
             .args(["-0", pid])
@@ -1469,8 +1507,9 @@ mod tests {
     #[test]
     fn web_fetch_blocks_when_allowlist_empty() {
         let _lock = ENV_LOCK.lock().unwrap();
-        // Default: no allowlist → every request is blocked.
-        std::env::remove_var("LLM_WEB_ALLOWLIST");
+        // Default: no allowlist → every request is blocked. EnvGuard
+        // restores any value the developer had exported afterwards.
+        let _env = EnvGuard::remove("LLM_WEB_ALLOWLIST");
         let result = execute_web_fetch("https://example.com/");
         assert!(
             result.contains("LLM_WEB_ALLOWLIST"),
@@ -1481,10 +1520,9 @@ mod tests {
     #[test]
     fn web_fetch_rejects_non_http_schemes() {
         let _lock = ENV_LOCK.lock().unwrap();
-        std::env::set_var("LLM_WEB_ALLOWLIST", "example.com");
+        let _env = EnvGuard::set("LLM_WEB_ALLOWLIST", "example.com");
         let result = execute_web_fetch("file:///etc/passwd");
         assert!(result.contains("not allowed"), "got: {result}");
-        std::env::remove_var("LLM_WEB_ALLOWLIST");
     }
 
     #[test]
